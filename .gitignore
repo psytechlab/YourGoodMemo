@@ -1,13 +1,44 @@
+
 .env
 .env.local
 .env.*.local
 .env.template
 .vscode/
 .idea/
+
+# Личные переписки
+data/result.json
+data/nastya.json
+data/tema.json
+data/*.json
+data/*.txt
+data/*.xlsx
+CONTEXT.md
+# Результаты прогонов
+results/
+
+# Python 
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Claude Code 
+.claude/
+
+#
+.idea/
+.vscode/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
+
 desktop.ini
 data/situations.yaml
 docs/_build/
@@ -68,5 +99,6 @@ dmypy.json
 .gitmodules
 
 
-
+.env
+.env.*
 
