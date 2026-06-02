@@ -1,17 +1,5 @@
 """
 lemmatizer.py
-=============
-Russian lemmatizer via natasha (Segmenter + NewsMorphTagger + MorphVocab).
-
-Normalises word forms to base form before lexicon matching:
-    «помогала», «помогаешь», «помогите» → «помочь»
-    «кошек», «кошке», «кошку»           → «кошка»
-    «зарплату», «зарплаты», «зарплате»  → «зарплата»
-
-Models are loaded once at import time (~1-2 sec, then cached).
-
-Usage:
-    from anchor_detection.lemmatizer import lemmatize_text, lemmatize_lexicon
 """
 
 from functools import lru_cache
@@ -25,7 +13,7 @@ _morph_tagger = NewsMorphTagger(_emb)
 
 
 def lemmatize_text(text: str) -> str:
-    """Returns space-joined lemmas for all tokens in text."""
+    """Returns space-joined lemmas for all tokens in text"""
     if not text or not text.strip():
         return ""
     doc = Doc(text[:600])          # cap length for speed
@@ -37,7 +25,7 @@ def lemmatize_text(text: str) -> str:
 
 
 def lemmatize_word(word: str) -> str:
-    """Returns the lemma of a single word."""
+    """Returns the lemma of a single word"""
     doc = Doc(word.strip())
     doc.segment(_segmenter)
     doc.tag_morph(_morph_tagger)

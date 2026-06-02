@@ -5,8 +5,6 @@ run_multi.py
 
 Использование:
     python run_multi.py data/result.json
-    python run_multi.py data/result.json data/nastya.json data/tema.json
-    python run_multi.py data/result.json --window 60
 """
 
 import argparse
