@@ -3,13 +3,18 @@ stage4_narrator.py
 ==================
 Ступень 4: генерация поддерживающего нарративного текста.
 
-Для каждой найденной точки опоры модель пишет тёплый, личный абзац (4-6 предложений),
-который напоминает человеку о конкретных хороших моментах из его переписки.
+Новый формат вывода:
+  <Хук — 1 предложение о том, что у человека есть>
 
-Стиль: близкий друг, который знает твою жизнь — без психологических терминов,
-с реальными деталями из переписки, с простым призывом к действию.
+     Например, ты ...:
+     → [дата] Имя: «текст
+                    продолжение текста»
+
+     А ещё ...:
+     → [дата] Имя: «текст»
 """
 
+import json
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -18,7 +23,7 @@ from anchor_detection.llm_client import OllamaClient
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Описания точек опоры для нарратора
+# Описания точек опоры
 # ══════════════════════════════════════════════════════════════════════
 
 ANCHOR_CONTEXT = {
@@ -58,34 +63,157 @@ ANCHOR_CONTEXT = {
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Системный промт
+# Промт для LLM
 # ══════════════════════════════════════════════════════════════════════
 
-_NARRATOR_SYSTEM = """Ты пишешь честный, личный текст для человека о конкретном аспекте его жизни.
+_NARRATOR_SYSTEM = """Ты описываешь конкретный аспект жизни человека на основе фрагментов его переписки.
 
-Задача: на основе реальных фрагментов переписки написать 4-7 предложений,
-которые объяснят человеку, ЧТО именно у него есть и почему это имеет значение.
+Верни JSON строго по этой схеме, без пояснений:
+{
+  "hook": "<одно короткое предложение, 2-е лицо — что у человека есть>",
+  "sections": [
+    {
+      "intro": "<вводная фраза 2-е лицо, ≤12 слов>",
+      "message_ids": ["<id1>", "<id2>"]
+    }
+  ]
+}
 
-ТОНАЛЬНОСТЬ:
-- Спокойно, без эйфории — как разговор с другом, который не делает вид, что всё хорошо
-- Обращение на «ты»
-- Конкретно: опирайся на детали из переписки, не на абстракции
+Правила для hook:
+- Обращение на «ты»: «У тебя есть...», «Тебя ценят за...», «Есть люди...»
+- Конкретно и просто, максимум 12 слов
+- ЗАПРЕЩЕНО: «опора», «ресурс», «поддержка», «благополучие»
 
-СТРУКТУРА:
-1. Что у тебя есть (конкретное наблюдение, не «сколько всего хорошего»)
-2. Откуда это видно — 1-2 конкретных момента из переписки (без ссылок на «переписку»)
-3. Что это значит на практике — не «это прекрасно», а «это значит, что...»
-4. Опционально: тихое, без восклицательных знаков предложение («можно позвонить», «стоит написать»)
+Правила для sections (одна секция = одна улика):
+- intro начинается с «Например,» / «А ещё» / «Одна из таких вещей»
+- Обращение на «ты»: «Например, ты часто...», «А ещё ты...»
+- Описывай конкретно ЧТО происходит, не пересказывай why дословно
+- НЕ заканчивай intro двоеточием (оно добавится автоматически)
+- Копируй message_ids ТОЧНО из улики — ни символа не меняй
+- ЗАПРЕЩЕНО в intro: «переписка», «сообщение», «чат», «переписываться»"""
 
-СТРОГО ЗАПРЕЩЕНО — эти фразы делают текст фальшивым:
-- «Посмотри, сколько всего хорошего», «как прекрасна жизнь», «радуйся»
-- «Не забывай», «помни об этом», «цени это»
-- «Опора», «ресурс», «поддержка», «ресурс», «благополучие»
-- «Анализ показал», «в переписке», «судя по сообщениям»
-- Восклицательные знаки — они звучат как принуждение к радости
-- Избыточный сленг из переписки — только если слово естественно вписывается
 
-ФОРМАТ: только текст абзаца, никаких заголовков и пояснений."""
+# ══════════════════════════════════════════════════════════════════════
+# Форматирование сообщений
+# ══════════════════════════════════════════════════════════════════════
+
+_MONTHS_RU = {
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+}
+
+
+def _fmt_date(ts_str: str) -> str:
+    """Преобразует '2026-03-23 12:09:...' → '2026 Март'."""
+    try:
+        parts = str(ts_str)[:10].split("-")
+        year = parts[0]
+        month = int(parts[1])
+        return f"{year} {_MONTHS_RU.get(month, parts[1])}"
+    except (ValueError, IndexError):
+        return str(ts_str)[:10]
+
+
+def _fmt_chat_message(row: Dict, prefix: str = "   → ") -> str:
+    """
+    Форматирует одно сообщение в стиле чата с выравниванием многострочного текста.
+
+      → 2026 Март — Захар: «Первая строка
+                             Вторая строка»
+    """
+    text = str(row.get("text", "")).strip()
+    if not text:
+        return ""
+    sender = str(row.get("sender", ""))
+    ts = _fmt_date(str(row.get("ts") or row.get("date", "")))
+
+    header = f"{prefix}{ts} — {sender}: «"
+    padding = " " * len(header)
+
+    parts = [p.strip() for p in text.split("\n") if p.strip()]
+    if not parts:
+        return ""
+
+    if len(parts) == 1:
+        return f"{header}{parts[0]}»"
+
+    result = header + parts[0]
+    for p in parts[1:]:
+        result += "\n" + padding + p
+    result += "»"
+    return result
+
+
+def _format_narrative(hook: str, sections: List[Dict], msg_index: Dict) -> str:
+    """Собирает итоговый текст нарратива из хука и секций с сообщениями."""
+    # Нормализуем хук: точка в конце
+    hook = hook.strip()
+    if hook and hook[-1] not in ".!?":
+        hook += "."
+
+    lines: List[str] = [hook, ""]
+
+    for section in sections:
+        intro = section.get("intro", "").strip().rstrip(":")
+        msg_ids = section.get("message_ids", [])
+        if not intro or not msg_ids:
+            continue
+
+        lines.append(f"   {intro}:")
+
+        for mid_str in msg_ids:
+            row = msg_index.get(str(mid_str), {})
+            msg_line = _fmt_chat_message(row)
+            if msg_line:
+                lines.append(msg_line)
+
+        lines.append("")  # пустая строка между секциями
+
+    # Убираем хвостовые пустые строки
+    while lines and not lines[-1]:
+        lines.pop()
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Подготовка промта для LLM
+# ══════════════════════════════════════════════════════════════════════
+
+def _build_user_prompt(anchor_code: str, evidence: List[Dict], msg_index: Dict) -> str:
+    """Строит user-prompt с уликами и примерами текстов сообщений."""
+    ctx = ANCHOR_CONTEXT.get(anchor_code, {})
+    anchor_name = ctx.get("name", anchor_code)
+    anchor_hint = ctx.get("hint", "")
+
+    lines = [
+        f"Тема: «{anchor_name}»",
+        f"Контекст: {anchor_hint}",
+        "",
+        "Принятые улики:",
+    ]
+
+    for i, ev in enumerate(evidence[:5], 1):
+        lines.append(f"\n[Улика {i}]")
+        msg_ids = ev.get("message_ids", [])
+        lines.append(f"message_ids: {json.dumps(msg_ids, ensure_ascii=False)}")
+        why = ev.get("why", ev.get("verdict_text", ""))
+        if why:
+            lines.append(f"Описание: {why}")
+
+        msg_texts = []
+        for mid in msg_ids[:3]:
+            row = msg_index.get(str(mid), {})
+            text = str(row.get("text", "")).strip()[:150]
+            if text:
+                sender = str(row.get("sender", ""))
+                msg_texts.append(f"  {sender}: «{text}»")
+        if msg_texts:
+            lines.append("Тексты сообщений:")
+            lines.extend(msg_texts)
+
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -94,7 +222,7 @@ _NARRATOR_SYSTEM = """Ты пишешь честный, личный текст 
 
 class AnchorNarrator:
     """
-    Генерирует поддерживающий нарративный текст для найденных точек опоры.
+    Генерирует нарративный текст для найденных точек опоры.
 
     Параметры
     ----------
@@ -126,55 +254,44 @@ class AnchorNarrator:
         df:           Optional[pd.DataFrame] = None,
     ) -> str:
         """
-        Генерирует нарративный абзац для одной точки опоры.
+        Генерирует нарративный блок для одной точки опоры.
 
-        Параметры
-        ----------
-        anchor_code : "S1" | "S2" | ...
-        evidence    : список evidence-словарей из Stage 3 (с verdict="accepted")
-        msg_index   : dict msg_id → row (для извлечения текста)
-        target_name : имя пользователя (необязательно)
-        df          : объединённый DataFrame всех чатов — для контекста вокруг цитат
+        Возвращает текст в формате:
+          <хук>
+
+             Например, ты ...:
+             → [дата] Имя: «текст»
         """
-        ctx = ANCHOR_CONTEXT.get(anchor_code, {})
-        anchor_name = ctx.get("name", anchor_code)
-        anchor_hint = ctx.get("hint", "")
-
-        # Строим диалоговые эпизоды (с контекстом) вместо изолированных цитат
-        df_sorted = None
-        if df is not None:
-            df_sorted = df[
-                (df["msg_type"] == "message") & df["has_text"]
-            ].sort_values("date").reset_index(drop=True)
-
-        episodes = _extract_episodes(evidence, msg_index, df_sorted)
-        if not episodes:
+        if not evidence:
             return ""
 
-        proper_names = _extract_proper_names(evidence, msg_index)
-
-        user_prompt = (
-            f"Тема: «{anchor_name}»\n"
-            f"Контекст: {anchor_hint}\n\n"
-            f"Фрагменты переписки (→ отмечает ключевое сообщение):\n\n"
-            + "\n\n".join(f"[Момент {i+1}]\n{ep}" for i, ep in enumerate(episodes))
-        )
-        if proper_names:
-            user_prompt += f"\n\nИмена людей в переписке: {', '.join(proper_names)}"
-        user_prompt += "\n\nНапиши текст."
+        user_prompt = _build_user_prompt(anchor_code, evidence, msg_index)
 
         try:
-            text = self.client.chat(
+            result = self.client.chat(
                 system      = _NARRATOR_SYSTEM,
                 user        = user_prompt,
-                temperature = 0.7,
-                json_mode   = False,
+                temperature = 0.5,
+                json_mode   = True,
             )
-            return str(text).strip()
-
         except Exception as exc:
             print(f"  [Stage 4 / {anchor_code}] Ошибка: {exc}")
             return ""
+
+        if not isinstance(result, dict):
+            return ""
+
+        hook = str(result.get("hook", "")).strip()
+        sections = result.get("sections", [])
+
+        if not hook:
+            ctx = ANCHOR_CONTEXT.get(anchor_code, {})
+            hook = ctx.get("hint", "")
+
+        if not sections:
+            return hook
+
+        return _format_narrative(hook, sections, msg_index)
 
     def generate_all(
         self,
@@ -210,172 +327,3 @@ class AnchorNarrator:
                 print(f"    ✓ {len(text)} символов")
 
         return narratives
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Вспомогательные функции
-# ══════════════════════════════════════════════════════════════════════
-
-def _extract_proper_names(evidence: List[Dict], msg_index: Dict) -> List[str]:
-    """Извлекает только имена собственные (людей) из цитат."""
-    import re
-    names = []
-    seen = set()
-    for ev in evidence:
-        for mid_str in ev.get("message_ids", []):
-            row = msg_index.get(str(mid_str), {})
-            if not row:
-                continue
-            sender = str(row.get("sender", "")).strip()
-            if sender and sender.lower() not in seen:
-                seen.add(sender.lower())
-                # Берём только имя (первое слово), не полное ФИО
-                first_name = sender.split()[0]
-                if len(first_name) > 2:
-                    names.append(first_name)
-    return names[:4]  # не больше 4 имён
-
-
-_STOP_WORDS = frozenset({
-    "и", "в", "на", "с", "по", "из", "за", "к", "до", "от", "для", "при",
-    "не", "но", "или", "если", "что", "как", "это", "то", "так", "уже",
-    "да", "нет", "ну", "вот", "ты", "я", "он", "она", "мы", "вы", "они",
-    "его", "её", "их", "мне", "тебе", "все", "свой", "своя", "своё",
-    "тут", "там", "здесь", "тогда", "когда", "чтобы", "потому", "просто",
-    "ещё", "еще", "был", "была", "были", "быть", "есть", "нет", "бы",
-})
-
-
-def _extract_chat_phrases(evidence: List[Dict], msg_index: Dict) -> List[str]:
-    """
-    Извлекает характерные слова и короткие фразы из цитат переписки.
-    Отбирает слова, которые не входят в стоп-список и длиннее 4 символов.
-    """
-    import re
-    word_freq: dict = {}
-
-    for ev in evidence:
-        for mid_str in ev.get("message_ids", []):
-            row = msg_index.get(str(mid_str), {})
-            if not row:
-                continue
-            text = str(row.get("text", "")).lower().strip()
-            if not text:
-                continue
-            words = re.findall(r"\b[а-яёa-z][а-яёa-z]{3,}\b", text)
-            for w in words:
-                if w not in _STOP_WORDS:
-                    word_freq[w] = word_freq.get(w, 0) + 1
-
-    # Уникальные слова, встречающиеся 1-2 раза (специфические, не частотные)
-    candidates = [w for w, c in word_freq.items() if c <= 3]
-    # Приоритет словам с заглавной буквы (имена, названия) — ищем в оригинале
-    result = []
-    for ev in evidence:
-        for mid_str in ev.get("message_ids", []):
-            row = msg_index.get(str(mid_str), {})
-            if not row:
-                continue
-            text = str(row.get("text", ""))
-            # Имена собственные и названия (заглавная буква посреди предложения)
-            names = re.findall(r"(?<!\. )(?<!\n)[А-ЯA-Z][а-яёa-z]{2,}", text)
-            result.extend(n for n in names if n.lower() not in _STOP_WORDS)
-    # Добавляем характерные слова из переписки
-    result.extend(candidates[:10])
-    # Уникализируем, ограничиваем
-    seen = set()
-    unique = []
-    for w in result:
-        lw = w.lower()
-        if lw not in seen:
-            seen.add(lw)
-            unique.append(w)
-    return unique[:12]
-
-
-def _extract_episodes(
-    evidence:  List[Dict],
-    msg_index: Dict,
-    df_sorted: Optional[pd.DataFrame] = None,
-    n_context: int = 2,
-    max_episodes: int = 6,
-) -> List[str]:
-    """
-    Строит диалоговые эпизоды вокруг каждой улики.
-
-    Каждый эпизод — это несколько строк:
-      несколько сообщений до ключевого
-    → ключевое сообщение (помечено стрелкой)
-      несколько сообщений после
-
-    Если df_sorted не передан — возвращает только изолированные цитаты.
-    """
-    def _raw_mid(mid_str: str) -> Optional[int]:
-        """Извлекает числовой msg_id из строки вида 'chat_id:msg_N' или 'msg_N'."""
-        try:
-            return int(str(mid_str).split(":")[-1].replace("msg_", ""))
-        except (ValueError, AttributeError):
-            return None
-
-    # Строим позиционный индекс для поиска соседей (по голому int из df)
-    id_to_pos: Dict = {}
-    if df_sorted is not None:
-        id_to_pos = {int(row["msg_id"]): idx for idx, row in df_sorted.iterrows()}
-
-    episodes = []
-    seen_ids: set = set()
-
-    for ev in evidence:
-        msg_ids = ev.get("message_ids", [])
-        if not msg_ids:
-            continue
-
-        # Центральное сообщение эпизода — первое в списке улики
-        main_mid_str = msg_ids[0]
-        if main_mid_str in seen_ids:
-            continue
-        seen_ids.add(main_mid_str)
-
-        main_mid = _raw_mid(main_mid_str)
-        if main_mid is None:
-            continue
-
-        lines = []
-
-        if df_sorted is not None and main_mid in id_to_pos:
-            pos = id_to_pos[main_mid]
-
-            # Контекст до
-            for _, r in df_sorted.iloc[max(0, pos - n_context): pos].iterrows():
-                t = str(r.get("text", ""))[:150]
-                if t:
-                    lines.append(f"  {r.get('sender','')}: «{t}»")
-
-            # Все сообщения самой улики (ключевые, с →)
-            for mid_str in msg_ids:
-                row = msg_index.get(str(mid_str), {})
-                text = str(row.get("text", "")).strip()
-                if text:
-                    lines.append(f"→ {row.get('sender','')}: «{text[:200]}»")
-
-            # Контекст после
-            for _, r in df_sorted.iloc[pos + 1: pos + 1 + n_context].iterrows():
-                t = str(r.get("text", ""))[:150]
-                if t:
-                    lines.append(f"  {r.get('sender','')}: «{t}»")
-
-        else:
-            # Fallback без df — изолированные цитаты
-            for mid_str in msg_ids:
-                row = msg_index.get(str(mid_str), {})
-                text = str(row.get("text", "")).strip()
-                if text:
-                    lines.append(f"→ {row.get('sender','')}: «{text[:200]}»")
-
-        if lines:
-            episodes.append("\n".join(lines))
-
-        if len(episodes) >= max_episodes:
-            break
-
-    return episodes

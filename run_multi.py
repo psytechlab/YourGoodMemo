@@ -17,7 +17,7 @@ from multi_pipeline.orchestrator import MultiStagePipeline
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Поиск точек опоры P1+P2 (трёхступенчатый пайплайн)",
+        description="Поиск точек опоры P1+P2 — пятиступенчатый пайплайн",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("chats", nargs="+", metavar="CHAT.json",
@@ -28,9 +28,11 @@ def parse_args():
     p.add_argument("--narrator",  default="mistral-nemo:12b")
     p.add_argument("--composer",  default="mistral-nemo:12b")
     p.add_argument("--window", "-w", type=int, default=90)
-    p.add_argument("--output", "-o", default="data/anchor_profile_multi.json")
-    p.add_argument("--report", "-r", default="data/anchor_report_multi.txt")
+    p.add_argument("--output", "-o", default="results/profile.json")
+    p.add_argument("--report", "-r", default="results/report.txt")
     p.add_argument("--ollama-url",  default="http://localhost:11434")
+    p.add_argument("--no-sentiment", action="store_true",
+                   help="Отключить BERT-разметку тональности (быстрее, но менее точно)")
     return p.parse_args()
 
 
@@ -52,16 +54,19 @@ def main():
     print(f"  Stage 5 (composer):  {args.composer}")
     print(f"  Окно:   {args.window} дней")
     print(f"  Чаты:   {', '.join(args.chats)}")
+    use_sent = not args.no_sentiment
+    print(f"  Sentiment BERT: {'включён' if use_sent else 'отключён (--no-sentiment)'}")
     print(sep)
 
     config = PipelineConfig(
-        labeler_model   = args.labeler,
-        detector_model  = args.detector,
-        validator_model = args.validator,
-        narrator_model  = args.narrator,
-        composer_model  = args.composer,
-        ollama_url      = args.ollama_url,
-        window_days     = args.window,
+        labeler_model    = args.labeler,
+        detector_model   = args.detector,
+        validator_model  = args.validator,
+        narrator_model   = args.narrator,
+        composer_model   = args.composer,
+        ollama_url       = args.ollama_url,
+        window_days      = args.window,
+        use_sentiment    = use_sent,
     )
 
     pipeline = MultiStagePipeline(config=config, verbose=True)

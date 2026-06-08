@@ -46,10 +46,38 @@ def _fmt_with_context(c: Dict) -> str:
     for m in c.get("context_before", []):
         lines.append(f"  ↑ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     role = c.get("role", "")
-    lines.append(f"[{c['msg_id']}] role={role} {c.get('ts', '')[:10]} {c['sender']}: {c['text']!r}")
+    # Добавляем тональность в строку если она есть (помогает LLM понять окрас)
+    sent = c.get("sentiment", "")
+    sent_str = f" [{sent}]" if sent else ""
+    lines.append(
+        f"[{c['msg_id']}] role={role}{sent_str} {c.get('ts', '')[:10]} {c['sender']}: {c['text']!r}"
+    )
     for m in c.get("context_after", []):
         lines.append(f"  ↓ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     return "\n".join(lines)
+
+
+def _sentiment_summary(msgs: List[Dict]) -> str:
+    """
+    Возвращает строку с распределением тональностей для заголовка промпта.
+    Пример: 'positive: 2/7, neutral: 4/7, negative: 1/7'
+    Если данные о тональности отсутствуют — возвращает пустую строку.
+    """
+    if not msgs:
+        return ""
+    counts: Dict[str, int] = {}
+    has_sent = False
+    for m in msgs:
+        s = m.get("sentiment", "")
+        if s:
+            has_sent = True
+            counts[s] = counts.get(s, 0) + 1
+    if not has_sent:
+        return ""
+    total = len(msgs)
+    order = ["positive", "neutral", "negative"]
+    parts = [f"{s}: {counts.get(s, 0)}/{total}" for s in order if counts.get(s, 0) > 0]
+    return ", ".join(parts)
 
 _SCHEMA = """
 Формат ответа:
@@ -120,11 +148,17 @@ def detect_S1_stage2(
     aggregates:   Dict,
     client:       OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
+    payload: Dict[str, Any] = {
         "aggregates":       aggregates,
         "target_messages":  target_msgs,
         "contact_messages": contact_msgs,
-    }, ensure_ascii=False, indent=2)
+    }
+    sent_t = _sentiment_summary(target_msgs)
+    sent_c = _sentiment_summary(contact_msgs)
+    if sent_t or sent_c:
+        payload["sentiment_target_msgs"]  = sent_t or "нет данных"
+        payload["sentiment_contact_msgs"] = sent_c or "нет данных"
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         n = len(target_msgs) + len(contact_msgs)
@@ -177,10 +211,11 @@ def detect_S2_stage2(
             "candidate_evidence": [],
         }, "S2")
 
-    user_prompt = json.dumps({
-        "aggregates":    aggregates,
-        "group_messages": group_msgs,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": aggregates, "group_messages": group_msgs}
+    sent = _sentiment_summary(group_msgs)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         result = client.chat(system=_S2_SYSTEM, user=user_prompt, temperature=0.1,
@@ -229,11 +264,15 @@ def detect_S5_stage2(
     aggregates: Dict,
     client:     OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
+    payload: Dict[str, Any] = {
         "aggregates":            aggregates,
         "help_request_messages": help_msgs,
         "post_silence_pings":    ping_msgs,
-    }, ensure_ascii=False, indent=2)
+    }
+    sent = _sentiment_summary(help_msgs)
+    if sent:
+        payload["sentiment_help_msgs"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         n = len(help_msgs) + len(ping_msgs)
@@ -284,10 +323,11 @@ def detect_D2_stage2(
     aggregates:     Dict,
     client:         OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
-        "aggregates":         aggregates,
-        "financial_messages": financial_msgs,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": aggregates, "financial_messages": financial_msgs}
+    sent = _sentiment_summary(financial_msgs)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         result = client.chat(system=_D2_SYSTEM, user=user_prompt, temperature=0.1,
