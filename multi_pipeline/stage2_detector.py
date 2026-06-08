@@ -36,7 +36,7 @@ _RULES = """
 4. Мемы, шаблонные фразы, риторика — НЕ являются доказательствами.
 5. Ответ строго в JSON. Все текстовые поля — только на русском языке.
 6. Каждое сообщение содержит поля context_before и context_after — соседние сообщения в диалоге.
-   Используй их для понимания тона и смысла, но ссылайся в evidence только на msg_id основного сообщения.
+   Используй их для понимания тона и смысла.
 """
 
 
@@ -46,10 +46,38 @@ def _fmt_with_context(c: Dict) -> str:
     for m in c.get("context_before", []):
         lines.append(f"  ↑ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     role = c.get("role", "")
-    lines.append(f"[{c['msg_id']}] role={role} {c.get('ts', '')[:10]} {c['sender']}: {c['text']!r}")
+    # Добавляем тональность в строку если она есть (помогает LLM понять окрас)
+    sent = c.get("sentiment", "")
+    sent_str = f" [{sent}]" if sent else ""
+    lines.append(
+        f"[{c['msg_id']}] role={role}{sent_str} {c.get('ts', '')[:10]} {c['sender']}: {c['text']!r}"
+    )
     for m in c.get("context_after", []):
         lines.append(f"  ↓ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     return "\n".join(lines)
+
+
+def _sentiment_summary(msgs: List[Dict]) -> str:
+    """
+    Возвращает строку с распределением тональностей для заголовка промпта.
+    Пример: 'positive: 2/7, neutral: 4/7, negative: 1/7'
+    Если данные о тональности отсутствуют — возвращает пустую строку.
+    """
+    if not msgs:
+        return ""
+    counts: Dict[str, int] = {}
+    has_sent = False
+    for m in msgs:
+        s = m.get("sentiment", "")
+        if s:
+            has_sent = True
+            counts[s] = counts.get(s, 0) + 1
+    if not has_sent:
+        return ""
+    total = len(msgs)
+    order = ["positive", "neutral", "negative"]
+    parts = [f"{s}: {counts.get(s, 0)}/{total}" for s in order if counts.get(s, 0) > 0]
+    return ", ".join(parts)
 
 _SCHEMA = """
 Формат ответа:
@@ -120,11 +148,17 @@ def detect_S1_stage2(
     aggregates:   Dict,
     client:       OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
+    payload: Dict[str, Any] = {
         "aggregates":       aggregates,
         "target_messages":  target_msgs,
         "contact_messages": contact_msgs,
-    }, ensure_ascii=False, indent=2)
+    }
+    sent_t = _sentiment_summary(target_msgs)
+    sent_c = _sentiment_summary(contact_msgs)
+    if sent_t or sent_c:
+        payload["sentiment_target_msgs"]  = sent_t or "нет данных"
+        payload["sentiment_contact_msgs"] = sent_c or "нет данных"
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         n = len(target_msgs) + len(contact_msgs)
@@ -148,7 +182,7 @@ _S2_SYSTEM = """Ты — детектор точки опоры S2 «Прина�
 Задача: определить, есть ли у пользователя ощущение принадлежности к живому сообществу.
 
 СИГНАЛЫ ОПОРЫ:
-  - Пользователь регулярно (>= 1 раза в неделю на протяжении >= 6 недель) участвует в группе.
+  - Пользователь регулярно (>= 1 раза в неделю) участвует в группе.
   - Использует «мы» применительно к группе (не риторически).
   - Есть регулярные совместные события (один день недели, общие темы).
 
@@ -177,10 +211,11 @@ def detect_S2_stage2(
             "candidate_evidence": [],
         }, "S2")
 
-    user_prompt = json.dumps({
-        "aggregates":    aggregates,
-        "group_messages": group_msgs,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": aggregates, "group_messages": group_msgs}
+    sent = _sentiment_summary(group_msgs)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         result = client.chat(system=_S2_SYSTEM, user=user_prompt, temperature=0.1,
@@ -203,13 +238,13 @@ _S5_SYSTEM = """Ты — детектор точки опоры S5 «Я нуже
 Задача: определить, есть ли регулярный паттерн — люди обращаются к пользователю
 за помощью, он нужен им, несёт реальную ответственность.
 
-СИГНАЛЫ ОПОРЫ:
-  - Несколько разных людей обращаются к пользователю за помощью.
-  - Просьбы конкретные (сделай X, подскажи Y, помоги с Z).
+СИГНАЛЫ ОПОРЫ:етные (сделай X, подскажи Y, помоги с Z).
   - Паттерн повторяется: не единичная просьба, а регулярность.
 
 АНТИ-ПАТТЕРНЫ:
-  - Один и тот же человек с мелкими бытовыми вопросами (не помощь, а разговор).
+  - Один и тот же
+  - Несколько разных людей обращаются к пользователю за помощью.
+  - Просьбы конкр человек с мелкими бытовыми вопросами (не помощь, а разговор).
   - Риторические вопросы без ожидания действия.
   - Манипулятивные «ты мне нужен» в конфликте — это не опора.
   - Мемы и шаблонные фразы.
@@ -229,11 +264,15 @@ def detect_S5_stage2(
     aggregates: Dict,
     client:     OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
+    payload: Dict[str, Any] = {
         "aggregates":            aggregates,
         "help_request_messages": help_msgs,
         "post_silence_pings":    ping_msgs,
-    }, ensure_ascii=False, indent=2)
+    }
+    sent = _sentiment_summary(help_msgs)
+    if sent:
+        payload["sentiment_help_msgs"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         n = len(help_msgs) + len(ping_msgs)
@@ -284,10 +323,11 @@ def detect_D2_stage2(
     aggregates:     Dict,
     client:         OllamaClient,
 ) -> Dict:
-    user_prompt = json.dumps({
-        "aggregates":         aggregates,
-        "financial_messages": financial_msgs,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": aggregates, "financial_messages": financial_msgs}
+    sent = _sentiment_summary(financial_msgs)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
         result = client.chat(system=_D2_SYSTEM, user=user_prompt, temperature=0.1,

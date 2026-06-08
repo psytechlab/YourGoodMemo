@@ -36,7 +36,7 @@ _COMPOSER_SYSTEM = """Ты собираешь единый текст для ч�
   [ВСТУПЛЕНИЕ — 2-3 предложения]
   Обращение к человеку без пафоса. Не «посмотри, сколько всего хорошего» и
   не «всё будет хорошо». Что-то вроде: «Бывает трудно видеть хорошее, когда
-  не очень хорошо. Но вот что точно есть.» Никакой эйфории.
+  все не очень хорошо. Но вот что точно есть.» Никакой эйфории.
 
   [ТЕЛО]
   Каждый блок — отдельный абзац. Используй тексты из блоков почти дословно.
@@ -49,7 +49,6 @@ _COMPOSER_SYSTEM = """Ты собираешь единый текст для ч�
 
 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО:
 - «Посмотри, сколько всего хорошего», «как прекрасна жизнь»
-- «Не забывай», «цени», «радуйся», «помни об этом»
 - «Опора», «ресурс», «поддержка», «психологическое»
 - Восклицательные знаки в позитивном контексте
 - Клише: «всё будет хорошо», «ты справишься», «верь в себя»
@@ -104,13 +103,15 @@ class FullResponseComposer:
         if not narratives:
             return ""
 
-        # Собираем блоки
+        # Собираем блоки — убираем строки-цитаты «→ [date]» перед передачей в LLM,
+        # чтобы composer работал с чистым прозаическим текстом
         blocks = []
         for code, text in narratives.items():
             if not text:
                 continue
             name = ANCHOR_NAMES.get(code, code)
-            blocks.append(f"[{name}]\n{text}")
+            prose = _strip_citations(text)
+            blocks.append(f"[{name}]\n{prose}")
 
         if not blocks:
             return ""
@@ -139,6 +140,19 @@ class FullResponseComposer:
             print(f"  [Stage 5] Ошибка генерации: {exc}")
             # Fallback: собираем вручную
             return _manual_compose(narratives, target_name)
+
+
+def _strip_citations(text: str) -> str:
+    """Убирает строки-цитаты «   → [дата]...» из нарратива, оставляя только прозу."""
+    lines = []
+    for line in text.split("\n"):
+        if line.lstrip().startswith("→ "):
+            continue
+        lines.append(line)
+    result = "\n".join(lines)
+    while "\n\n\n" in result:
+        result = result.replace("\n\n\n", "\n\n")
+    return result.strip()
 
 
 def _manual_compose(narratives: Dict[str, str], target_name: str) -> str:

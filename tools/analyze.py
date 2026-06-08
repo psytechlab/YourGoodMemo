@@ -1,17 +1,10 @@
 """
-analyze.py
-==========
-Аналитика результатов трёхступенчатого пайплайна.
+analyze.py — аналитика результатов пайплайна (однократный прогон, один чат)
 
-Для каждой точки опоры показывает:
-  - Что нашла Stage 1 (сколько кандидатов прошли фильтр)
-  - Что нашёл Stage 2 (candidate_evidence)
-  - Вердикт Stage 3 (принято / отклонено + причина)
-  - Полные цитаты из переписки для каждой улики
+Показывает: кандидаты Stage 1, улики Stage 2, вердикты Stage 3, цитаты.
 
-Запуск:
-    python analyze.py
-    python analyze.py --profile data/anchor_profile_multi.json
+Запуск из корня проекта:
+    python tools/analyze.py --profile results/profile_all4.json --chat data/result.json
 """
 
 import argparse
@@ -19,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from telegram_parser import TelegramChatParser
 
 SEP  = "=" * 70
@@ -129,7 +122,7 @@ def print_anchor(code: str, det: dict, idx: dict, label_dist: dict,
 
 def main():
     parser = argparse.ArgumentParser(description="Аналитика multi-stage пайплайна")
-    parser.add_argument("--profile", default="data/anchor_profile_multi.json",
+    parser.add_argument("--profile", default="results/profile.json",
                         help="Путь к JSON-профилю")
     parser.add_argument("--chat",    default="data/result.json",
                         help="Путь к result.json (для цитат)")

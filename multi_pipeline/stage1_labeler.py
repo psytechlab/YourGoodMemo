@@ -429,13 +429,72 @@ def _infer_role(anchor_code: str, sender_id: str, target_id: str) -> str:
 
 
 def _row_to_dict(row, role: str) -> Dict:
-    return {
+    d: Dict = {
         "msg_id":  f"msg_{row['msg_id']}",
         "ts":      str(row["date"])[:16],
         "sender":  row.get("sender", ""),
         "text":    str(row.get("text", ""))[:250],
         "role":    role,
     }
+    # Добавляем тональность, если она была размечена в df (sentinel: 'neutral', 0.5)
+    sent = row.get("sentiment", None)
+    if sent is not None and sent != "neutral":
+        d["sentiment"] = str(sent)
+        score = row.get("sentiment_score", 0.5)
+        d["sentiment_score"] = round(float(score), 3)
+    elif sent == "neutral":
+        d["sentiment"] = "neutral"
+        d["sentiment_score"] = round(float(row.get("sentiment_score", 0.5)), 3)
+    return d
+
+
+# Тональности, явно несовместимые с ролью якоря.
+# Фильтр МЯГКИЙ: отсекаем только при высокой уверенности (>= SENTIMENT_THRESHOLD).
+# Это снижает шум ДО LLM-валидации, не заменяя её.
+_ANCHOR_ROLE_INCOMPATIBLE = {
+    # Эмоциональное самораскрытие не бывает сильно позитивным
+    ("S1", "target_emotional"): {"positive"},
+    # Поддерживающий ответ не бывает сильно негативным
+    ("S1", "contact_empathy"):  {"negative"},
+    # Похвала не бывает негативной
+    ("S3", "praise_received"):  {"negative"},
+    # Оптимистичные планы не бывают негативными
+    ("C1", "future_plan"):      {"negative"},
+    # Хобби с увлечением не бывает негативным
+    ("D3", "hobby"):            {"negative"},
+    # Стрессор не бывает позитивным
+    ("E2", "stressor"):         {"positive"},
+    ("E2", "stressor_llm"):     {"positive"},
+}
+
+SENTIMENT_THRESHOLD = 0.85  # порог уверенности для отсева
+
+
+def _sentiment_prefilter(candidates: List[Dict], anchor_code: str) -> List[Dict]:
+    """
+    Мягкий sentiment-предфильтр: удаляет кандидатов, у которых тональность
+    явно несовместима с ожидаемой ролью якоря И уверенность >= SENTIMENT_THRESHOLD.
+
+    Не вызывается если в кандидатах нет поля 'sentiment'.
+    """
+    if not candidates or "sentiment" not in candidates[0]:
+        return candidates
+
+    kept, dropped = [], 0
+    for c in candidates:
+        sentiment = c.get("sentiment", "neutral")
+        score = float(c.get("sentiment_score", 0.0))
+        role = c.get("role", "")
+        incompatible = _ANCHOR_ROLE_INCOMPATIBLE.get((anchor_code, role), set())
+
+        if sentiment in incompatible and score >= SENTIMENT_THRESHOLD:
+            dropped += 1
+        else:
+            kept.append(c)
+
+    if dropped:
+        print(f" [sentiment-prefilter: -{dropped}]", end="", flush=True)
+    return kept
 
 
 def _ctx_msg(row) -> Dict:
@@ -828,6 +887,7 @@ class MessageLabeler:
                             print(f"  [Stage 1 / {code}] W{chunk+1}: {len(new_c)} regex",
                                   end="", flush=True)
                         if new_c:
+                            new_c = _sentiment_prefilter(new_c, code)
                             if self.verbose:
                                 print(" → валидация...", end=" ", flush=True)
                             new_v = _validate_candidates(new_c, code, self.client, df=df_work)
@@ -960,6 +1020,7 @@ class MessageLabeler:
                             print(f"  [Stage 1 / {code}] W{chunk+1}: {len(new_c)} regex",
                                   end="", flush=True)
                         if new_c:
+                            new_c = _sentiment_prefilter(new_c, code)
                             if self.verbose:
                                 print(" → валидация...", end=" ", flush=True)
                             new_v = _validate_candidates(new_c, code, self.client, df=df_work)
