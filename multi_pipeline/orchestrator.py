@@ -378,39 +378,72 @@ def _build_text_report(
         if caveat:
             lines.append(f"     Примечание: {caveat}")
 
-    # Примеры сообщений для найденных точек опоры
-    found_codes = set(summary["anchors_found"])
-    if found_codes:
+    # Примеры сообщений для найденных точек опоры + сентимент-распределение
+    _SENT_ICON = {"positive": "✚", "neutral": "○", "negative": "▼"}
+    all_codes_with_msgs = sorted(
+        [code for code, msgs in labels.items() if msgs],
+        key=lambda c: (c not in set(summary["anchors_found"]), c)
+    )
+    if any(labels.values()):
         lines.append(f"\n{'═' * 70}")
-        lines.append("  ПРИМЕРЫ СООБЩЕНИЙ (по результатам Stage 1)")
+        lines.append("  ПРИМЕРЫ КАНДИДАТОВ STAGE 1 + СЕНТИМЕНТ")
+        lines.append("  (✚ positive  ○ neutral  ▼ negative)")
         lines.append("═" * 70)
-        for code in sorted(found_codes):
+        for code in all_codes_with_msgs:
             name = ANCHOR_NAMES.get(code, code)
             msgs = labels.get(code, [])
             if not msgs:
                 continue
-            lines.append(f"\n  {code} — {name}:")
-            for msg in msgs[:4]:
+            found_marker = "✅" if code in set(summary["anchors_found"]) else "❌"
+
+            # Сентимент-распределение по всем кандидатам
+            sent_counts: dict = {}
+            has_sent = any("sentiment" in m for m in msgs)
+            for m in msgs:
+                s = m.get("sentiment", "")
+                if s:
+                    sent_counts[s] = sent_counts.get(s, 0) + 1
+            dist_str = ""
+            if has_sent:
+                total = len(msgs)
+                parts = []
+                for lbl in ["positive", "neutral", "negative"]:
+                    cnt = sent_counts.get(lbl, 0)
+                    if cnt:
+                        parts.append(f"{_SENT_ICON[lbl]}{lbl[0].upper()} {cnt}/{total}")
+                dist_str = "  [сентимент: " + "  ".join(parts) + "]"
+
+            lines.append(f"\n  {found_marker} {code} — {name}{dist_str}")
+            for msg in msgs[:5]:
                 ts     = msg.get("ts", "")[:10]
                 sender = msg.get("sender", "")
                 text   = msg.get("text", "")[:160]
                 role   = msg.get("role", "")
-                lines.append(f"    [{ts}] {sender} ({role}):")
+                sent   = msg.get("sentiment", "")
+                score  = msg.get("sentiment_score", None)
+                sent_tag = ""
+                if sent:
+                    icon = _SENT_ICON.get(sent, "?")
+                    score_s = f" {score:.2f}" if score is not None else ""
+                    sent_tag = f"  [{icon}{sent}{score_s}]"
+                lines.append(f"    [{ts}] {sender} ({role}){sent_tag}:")
                 lines.append(f"      «{text}»")
 
-    # Нарративы
+    # Нарративы — без кодов, только текст с разделителями между блоками
     narratives = profile.get("narratives", {})
     if narratives:
         lines.append(f"\n{'═' * 70}")
         lines.append("  НАРРАТИВНЫЕ ОПИСАНИЯ ТОЧЕК ОПОРЫ")
         lines.append("═" * 70)
+        first_block = True
         for code, narrative in narratives.items():
-            name = ANCHOR_NAMES.get(code, code)
-            lines.append(f"\n  {code} — {name}")
-            lines.append("  " + "─" * 60)
+            if not narrative.strip():
+                continue
+            if not first_block:
+                lines.append(f"\n  {'─' * 50}\n")
+            first_block = False
             for para in narrative.split("\n"):
-                if para.strip():
-                    lines.append(f"  {para}")
+                lines.append(f"  {para}")
 
     # Полный поддерживающий текст
     full = profile.get("full_response", "")
@@ -431,7 +464,7 @@ def _build_text_report(
 
 class MultiStagePipeline:
     """
-    Трёхступенчатый пайплайн поиска точек опоры.
+    Пятиступенчатый пайплайн поиска точек опоры
 
     Параметры
     ----------
@@ -464,7 +497,7 @@ class MultiStagePipeline:
         report_path: Optional[str] = None,
     ) -> Dict:
         """
-        Запускает полный трёхступенчатый пайплайн.
+        Запускает полный пятиступенчатый пайплайн
 
         Параметры
         ----------
@@ -481,7 +514,19 @@ class MultiStagePipeline:
         # ── 1. Загрузка ──────────────────────────────────────────────
         print(f"\n{SEP}\n  Шаг 1: Загрузка чатов\n{SEP}")
         t1 = time.time()
-        chats    = load_chats(file_paths)
+        chats = load_chats(file_paths)
+
+        # ── 1б. Sentiment-разметка (BERT, до лемматизации) ───────────
+        # Запускается на сырых текстах: BERT использует свой токенизатор,
+        # лемматизация убирает пунктуацию и регистр, важные для тональности.
+        if self.config.use_sentiment:
+            from anchor_detection.sentiment import add_sentiment_to_df
+            t_sent = time.time()
+            chats = [c._replace(df=add_sentiment_to_df(
+                c.df, batch_size=self.config.sentiment_batch_size
+            )) for c in chats]
+            print(f"  [Шаг 1б] Sentiment-разметка готова за {_fmt_t(time.time() - t_sent)}")
+
         msg_idx  = build_msg_index(chats)
         target   = chats[0].target_name
         agg      = _build_aggregates(chats, self.config.window_days)

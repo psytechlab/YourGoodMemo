@@ -15,10 +15,6 @@ stage3_validator.py
 import json
 from typing import Any, Dict, List, Optional
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from multi_pipeline.config import PipelineConfig
 from anchor_detection.llm_client import OllamaClient
 

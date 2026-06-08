@@ -54,10 +54,32 @@ def _fmt_with_context(c: Dict) -> str:
     for m in c.get("context_before", []):
         lines.append(f"  ↑ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     role = c.get("role", "")
-    lines.append(f"[{c['msg_id']}] role={role} {c.get('ts','')[:10]} {c['sender']}: {c['text']!r}")
+    sent_str = f" [{c['sentiment']}]" if c.get("sentiment") else ""
+    lines.append(
+        f"[{c['msg_id']}] role={role}{sent_str} {c.get('ts','')[:10]} {c['sender']}: {c['text']!r}"
+    )
     for m in c.get("context_after", []):
         lines.append(f"  ↓ [{m['msg_id']}] {m['sender']}: {m['text']!r}")
     return "\n".join(lines)
+
+
+def _sentiment_summary(msgs: List[Dict]) -> str:
+    """Распределение тональностей для добавления в контекст промпта."""
+    if not msgs:
+        return ""
+    counts: Dict[str, int] = {}
+    for m in msgs:
+        s = m.get("sentiment", "")
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+    if not counts:
+        return ""
+    total = len(msgs)
+    return ", ".join(
+        f"{s}: {counts.get(s, 0)}/{total}"
+        for s in ["positive", "neutral", "negative"]
+        if counts.get(s, 0) > 0
+    )
 
 
 def _default(code: str) -> Dict:
@@ -124,10 +146,11 @@ subscores для S3:
 def detect_S3_stage2(candidates: List[Dict], agg: Dict, client: OllamaClient) -> Dict:
     if not candidates:
         return _default("S3")
-    user_prompt = json.dumps({
-        "aggregates": agg,
-        "candidates": candidates,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": agg, "candidates": candidates}
+    sent = _sentiment_summary(candidates)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
     try:
         result = client.chat(system=_S3_SYSTEM, user=user_prompt, temperature=0.1,
                              timeout=max(360,len(candidates) * 10))
@@ -172,10 +195,11 @@ subscores для C1:
 def detect_C1_stage2(candidates: List[Dict], agg: Dict, client: OllamaClient) -> Dict:
     if not candidates:
         return _default("C1")
-    user_prompt = json.dumps({
-        "aggregates": agg,
-        "candidates": candidates,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": agg, "candidates": candidates}
+    sent = _sentiment_summary(candidates)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
     try:
         result = client.chat(system=_C1_SYSTEM, user=user_prompt, temperature=0.1,
                              timeout=max(360,len(candidates) * 10))
@@ -222,10 +246,11 @@ subscores для D3:
 def detect_D3_stage2(candidates: List[Dict], agg: Dict, client: OllamaClient) -> Dict:
     if not candidates:
         return _default("D3")
-    user_prompt = json.dumps({
-        "aggregates": agg,
-        "candidates": candidates,
-    }, ensure_ascii=False, indent=2)
+    payload: Dict[str, Any] = {"aggregates": agg, "candidates": candidates}
+    sent = _sentiment_summary(candidates)
+    if sent:
+        payload["sentiment_distribution"] = sent
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
     try:
         result = client.chat(system=_D3_SYSTEM, user=user_prompt, temperature=0.1,
                              timeout=max(360,len(candidates) * 10))
@@ -288,19 +313,27 @@ def detect_E2_stage2(
     if not episodes:
         return _default("E2")
 
-    # Форматируем эпизоды для LLM
+    # Форматируем эпизоды для LLM; тональность [positive/neutral/negative] показывает окрас
     lines = []
     for i, ep in enumerate(episodes[:5], 1):
         stressor = ep.get("stressor_msg", {})
         aftermath = ep.get("aftermath_msgs", [])
         lines.append(f"\n--- Эпизод {i} ---")
-        lines.append(f"СТРЕССОР [{stressor.get('msg_id','?')}] "
-                     f"{stressor.get('ts','')[:10]} {stressor.get('sender','')}: "
-                     f"{stressor.get('text','')!r}")
+        st_sent = stressor.get("sentiment", "")
+        st_sent_s = f" [{st_sent}]" if st_sent else ""
+        lines.append(
+            f"СТРЕССОР [{stressor.get('msg_id','?')}]{st_sent_s} "
+            f"{stressor.get('ts','')[:10]} {stressor.get('sender','')}: "
+            f"{stressor.get('text','')!r}"
+        )
         lines.append("ПОСЛЕ (следующие 2-3 недели):")
         for m in aftermath[:20]:
-            lines.append(f"  [{m.get('msg_id','?')}] {m.get('ts','')[:10]} "
-                         f"{m.get('sender','')}: {m.get('text','')!r}")
+            m_sent = m.get("sentiment", "")
+            m_sent_s = f" [{m_sent}]" if m_sent else ""
+            lines.append(
+                f"  [{m.get('msg_id','?')}]{m_sent_s} {m.get('ts','')[:10]} "
+                f"{m.get('sender','')}: {m.get('text','')!r}"
+            )
 
     user_prompt = "\n".join(lines)
 
