@@ -1,4 +1,12 @@
-# ── Личные переписки ──────────────────────────────────────────────────
+
+.env
+.env.local
+.env.*.local
+.env.template
+.vscode/
+.idea/
+
+# Личные переписки 
 data/mom.json
 data/nastya.json
 data/tema.json
@@ -7,15 +15,15 @@ data/*.xlsx
 # разрешаем пример формата
 !data/result.example.json
 
-# ── Результаты прогонов (содержат цитаты) ─────────────────────────────
+# Результаты прогонов (содержат цитаты) 
 results/
 
-# ── Презентационные и личные файлы ────────────────────────────────────
+# Презентационные и личные файлы 
 *.pptx
 контекст_защиты
 docs/сценарий_видео.md
 
-# ── Python ────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -26,15 +34,75 @@ env/
 dist/
 build/
 
-# ── Среда ─────────────────────────────────────────────────────────────
-.env
+# Среда
 .env.*
 .idea/
 .vscode/
+
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
 
-# ── Claude Code ───────────────────────────────────────────────────────
+desktop.ini
+data/situations.yaml
+docs/_build/
+site/
+data/characters/*.txt
+data/*.db
+*.db
+*.sqlite
+*.sqlite3
+output/
+results/
+experiments/
+
+# Логи и временные файлы
+logs/
+*.log
+*.csv
+session_log.txt
+anchor_log.json
+directives_*.csv
+
+# Ноутбуки
+notebooks/
+*.ipynb
+.ipynb_checkpoints/
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+*.tox
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+*.tmp
+*.bak
+*.orig
+*.rej
+*.patch
+
+# Git
+*.orig
+.gitattributes
+.gitmodules
+
+# Claude Code 
 .claude/
+
