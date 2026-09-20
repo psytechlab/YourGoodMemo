@@ -1,6 +1,6 @@
 import random
 import yaml
-from src.llm_client import LLMClient
+from src.llm_client import LLMuser
 
 class IReasoner:
     """The part of a brain that decide how to behaive.
@@ -28,17 +28,17 @@ class RandomReasoner(IReasoner):
         self.current_anchor = None
 
     def dice_directives(self):
-        """Возвращает две директивы: для клиента и для друга"""
+        """Возвращает две директивы: для пользователя и для друга"""
         random_num = random.randint(0, len(self.anchors) - 1)
         current_anchor = self.anchors[random_num]
         
-        # Выбираем случайную директиву для клиента из списка
-        client_dir = random.choice(current_anchor.get("client_directives", [""]))
+        # Выбираем случайную директиву для пользователя из списка
+        user_dir = random.choice(current_anchor.get("user_directives", [""]))
         
         # Выбираем случайную директиву для друга из списка
         friend_dir = random.choice(current_anchor.get("friend_directives", [""]))
         
-        return client_dir, friend_dir, current_anchor.get("id")
+        return user_dir, friend_dir, current_anchor.get("id")
 
 #    def dice_directive(self):
 #        random_num = random.randint(0, len(self.situations) - 1)
@@ -63,13 +63,13 @@ def think(self, **kwargs):
     
     self.anchor_persistence_steps -= 1
     
-    client_dir = random.choice(self.current_anchor.get("client_directives", [""]))
+    user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
     friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
     
-    return client_dir, friend_dir, self.current_anchor.get("id")
+    return user_dir, friend_dir, self.current_anchor.get("id")
 
 class LLMReasoner(RandomReasoner):
-    def __init__(self, llm_client: LLMClient, anchors_path: str):
+    def __init__(self, llm_client: LLMuser, anchors_path: str):
         self.llm_client = llm_client
         self.anchor_persistence_steps = 0
         self.current_anchor = None  
@@ -107,9 +107,9 @@ class LLMReasoner(RandomReasoner):
         
         if self.anchor_persistence_steps > 0 and self.current_anchor:
             self.anchor_persistence_steps -= 1
-            client_dir = random.choice(self.current_anchor.get("client_directives", [""]))
+            user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
             friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
-            return client_dir, friend_dir, self.current_anchor.get("id")
+            return user_dir, friend_dir, self.current_anchor.get("id")
         
         prompt = self.prompt_template.format(
             self._get_anchors_context(),
@@ -139,10 +139,10 @@ class LLMReasoner(RandomReasoner):
         self.current_anchor = selected_anchor
         self.anchor_persistence_steps = random.randint(2, 5)
         
-        client_dir = random.choice(self.current_anchor.get("client_directives", [""]))
+        user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
         friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
         
-        return client_dir, friend_dir, self.current_anchor.get("id")
+        return user_dir, friend_dir, self.current_anchor.get("id")
 
 
 
