@@ -1,6 +1,6 @@
 import requests
 
-class LLMClient:
+class LLMuser:
 
     def __init__(self, model_name: str, base_url:str, auth_token:str, system_prompt=None, temperature=0.7):
         self.base_url = base_url
@@ -38,7 +38,7 @@ class LLMClient:
         # ПРИНУДИТЕЛЬНАЯ ПОДСТАНОВКА, ЕСЛИ model_name = None
         if self.model_name is None:
             self.model_name = "mistral-nemo:12b"
-            print("🔧 ПРИНУДИТЕЛЬНО установлена модель в generate")
+            print("установлена модель в generate")
         
         data = {
             "model": self.model_name,

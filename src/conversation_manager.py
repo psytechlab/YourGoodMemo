@@ -28,8 +28,8 @@ def _ensure_csv():
 
 
 class ConversationManager:
-    def __init__(self, llm_client, system_prompt, reasoner, csv_logging=True):
-        self.llm_client = llm_client
+    def __init__(self, llm_user, system_prompt, reasoner, csv_logging=True):
+        self.llm_user = llm_user
         self.system_prompt = system_prompt
         self.reasoner = reasoner
         self.csv_logging = csv_logging
@@ -41,7 +41,7 @@ class ConversationManager:
 
         messages.append({"role": "user", "content": user_message + f"| {directive}"})
 
-        response = self.llm_client.generate(messages)
+        response = self.llm_user.generate(messages)
 
         if self.csv_logging:
             _ensure_csv()

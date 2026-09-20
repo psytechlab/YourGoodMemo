@@ -9,7 +9,7 @@ def main():
     # Configuration
     CHARACTERS_DIR = "data/characters"
     situation_path_list = [
-        ("reference/situations/angry.yaml", "prompts/agressive_3.txt"), 
+        ("reference/situations/angry.yaml", "prompts/user_prompt.txt"), 
         ("reference/situations/anxious.yaml", "prompts/anxious.txt")
         ]
     TURNS = 15
@@ -43,7 +43,7 @@ def main():
             "--reasoner", reasoner,
             "--turns", str(TURNS),
             "--situations_path", situation_path,
-            "--client_prompt_path", prompt_path,
+            "--user_prompt_path", prompt_path,
             "--character_path", char_path,
             "--output_file", output_file,
             "--client_base_model", model
