@@ -50,7 +50,6 @@ def main():
 
     with open(args.character_path, 'r', encoding='utf-8') as f:
         character_plist = f.read()
-
     user_persona = user_persona.format(character_plist)
 
     user_llm = LLMuser(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token)

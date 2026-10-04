@@ -19,12 +19,17 @@ class IReasoner:
 
 class RandomReasoner(IReasoner):
 
+<<<<<<< HEAD
     def __init__(self, anchors_path: str, filler_topics_path: str, filler_instruction_path: str,):
 
+=======
+    def __init__(self,  anchors_path: str):
+>>>>>>> d6f9ab81c9fcd9bba2f491e9de175541f53e0951
         with open(anchors_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
             self.anchors = data.get('anchors', [])
 
+<<<<<<< HEAD
         with open(filler_topics_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
             self.filler_topics = data.get('filler_topics', [])
@@ -163,6 +168,51 @@ class RandomReasoner(IReasoner):
 
 
 
+=======
+        self.anchor_persistence_steps = 0
+        self.current_anchor = None
+
+    def dice_directives(self):
+        """Возвращает две директивы: для пользователя и для друга"""
+        random_num = random.randint(0, len(self.anchors) - 1)
+        current_anchor = self.anchors[random_num]
+        
+        # Выбираем случайную директиву для пользователя из списка
+        user_dir = random.choice(current_anchor.get("user_directives", [""]))
+        
+        # Выбираем случайную директиву для друга из списка
+        friend_dir = random.choice(current_anchor.get("friend_directives", [""]))
+        
+        return user_dir, friend_dir, current_anchor.get("id")
+
+#    def dice_directive(self):
+#        random_num = random.randint(0, len(self.situations) - 1)
+#        return self.situations[random_num]["directive"]
+
+            
+#    def think(self, **kwargs):
+#        if self.directive_persistence_steps == 0:
+#            self.directive_persistence_steps = random.randint(1, 3)
+#            self.current_direcitve = self.dice_directive()
+#            return self.current_direcitve
+#        self.directive_persistence_steps -= 1
+#        return "Продолжай общаться в контексте предыдущей директивы" 
+
+
+def think(self, **kwargs):
+    # Если нет текущего anchor или время вышло
+    if self.anchor_persistence_steps <= 0 or not self.current_anchor:
+        random_num = random.randint(0, len(self.anchors) - 1)
+        self.current_anchor = self.anchors[random_num]
+        self.anchor_persistence_steps = random.randint(2, 5)
+    
+    self.anchor_persistence_steps -= 1
+    
+    user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
+    friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
+    
+    return user_dir, friend_dir, self.current_anchor.get("id")
+>>>>>>> d6f9ab81c9fcd9bba2f491e9de175541f53e0951
 
 class LLMReasoner(RandomReasoner):
     def __init__(self, llm_client: LLMuser, anchors_path: str):
@@ -243,5 +293,10 @@ class LLMReasoner(RandomReasoner):
 
 
 class DummyReasoner(IReasoner):
+<<<<<<< HEAD
     def think(self, **kwargs):
         return ("anchor", "none", "none", "none", "none", 0, "none")
+=======
+    def think(self, **kwargs) -> str:
+        return ""
+>>>>>>> d6f9ab81c9fcd9bba2f491e9de175541f53e0951

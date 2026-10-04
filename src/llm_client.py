@@ -2,7 +2,7 @@ import requests
 
 class LLMuser:
 
-    def __init__(self, model_name: str, base_url:str, auth_token:str, system_prompt=None, temperature=0.85):
+    def __init__(self, model_name: str, base_url:str, auth_token:str, system_prompt=None, temperature=0.7):
         self.base_url = base_url
         self.model_name = model_name
         headers = {

@@ -2,7 +2,6 @@ import csv
 import logging
 import os
 from datetime import datetime
-from pyexpat.errors import messages
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
