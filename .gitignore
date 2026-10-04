@@ -10,6 +10,7 @@ prompts/
 reference/
 data/anchors.yaml
 docs/Генератор_переписки.md
+data/filler_topics.yaml
 output/dialogues/
 output/*.json
 output/*.txt
