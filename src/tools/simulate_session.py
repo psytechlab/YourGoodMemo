@@ -1,26 +1,30 @@
 import os
+import json
 import argparse
 from datetime import datetime
-from dotenv import load_dotenv, parser
+from dotenv import load_dotenv
 from pathlib import Path
 
 from src.llm_client import LLMuser
 from src.conversation_manager import ConversationManager
 from src.reasoner import RandomReasoner, LLMReasoner, DummyReasoner
 
-# Load environment variables
 load_dotenv()
+
 
 def main():
     parser = argparse.ArgumentParser(description="Simulate psychotherapy session")
     parser.add_argument("--reasoner", type=str, default="random", choices=["random", "llm", "dummy"], help="Type of reasoner to use")
-    parser.add_argument("--anchors_path", type=str, default="data/anchors.yaml", help="Path to anchors file")       
+    parser.add_argument("--anchors_path", type=str, default="data/anchors.yaml", help="Path to anchors file")
+    parser.add_argument("--filler_topics_path", type=str, default="data/filler_topics.yaml", help="Path to filler topics file")
+    parser.add_argument("--filler_instruction_path", type=str, default="prompts/filler_instruction.txt", help="Path to filler instruction file")
     parser.add_argument("--user_base_model", type=str, default="mistral-nemo:12b", help="Model name for user LLM")
-    parser.add_argument("--turns", type=int, default=8, help="Number of turns (pairs of friend and user utterances) in the session")
+    parser.add_argument("--turns", type=int, default=8, help="Number of turns (pairs of friend and user utterances)")
     parser.add_argument("--user_prompt_path", type=str, default=Path.cwd()/"prompts/user_prompt.txt", help="Path to user persona prompt")
     parser.add_argument("--character_path", type=str, default=Path.cwd()/"data/characters/александр_лебедев.txt", help="Path to user persona description")
-    parser.add_argument("--output_file", type=str, default=Path.cwd()/"session_log.txt", help="Output file for the session log")
-    
+    parser.add_argument("--output_dir", type=str, default=Path.cwd()/"output/dialogues", help="Output directory for dialogues")
+    parser.add_argument("--dialogue_id", type=str, default="id_1", help="ID of the dialogue")
+
     args = parser.parse_args()
 
     # LLM Config
@@ -46,68 +50,70 @@ def main():
 
     with open(args.character_path, 'r', encoding='utf-8') as f:
         character_plist = f.read()
-    
+
     user_persona = user_persona.format(character_plist)
 
     user_llm = LLMuser(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token)
 
+    # 3. Initialize Reasoner
     if args.reasoner == "random":
-        reasoner = RandomReasoner(args.anchors_path)
+        reasoner = RandomReasoner(args.anchors_path, args.filler_topics_path, args.filler_instruction_path)
     elif args.reasoner == "llm":
         reasoner = LLMReasoner(user_llm, args.anchors_path)
     else:
         reasoner = DummyReasoner()
 
-    user_manager = ConversationManager(user_llm, user_persona, reasoner)
+    with open(args.filler_instruction_path, 'r', encoding='utf-8') as f:
+        filler_instruction = f.read()
 
-    # Simulation
+    # 4. Initialize Managers
+    user_manager = ConversationManager(user_llm, user_persona, reasoner, filler_instruction=filler_instruction)
+    friend_manager = ConversationManager(friend_user, friend_system_prompt, reasoner, filler_instruction=filler_instruction)
+
+    # 5. Container
+    container = {
+        "id": args.dialogue_id,
+        "meta": {
+            "mode": "dialog",
+            "author": "александр_лебедев"
+        },
+        "utterances": []
+    }
+
+    # Simulation state
     history = []
     transcript = []
-    anchor_log = []
-
-    # Header for the log
-    header = [
-        f"Simulation Parameters",
-        f"--------------------",
-        f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Model: {friend_model}",
-        f"user Persona: {args.user_prompt_path}",
-        f"Reasoner: {args.reasoner}",
-        f"Planned Turns (Pairs): {args.turns}",
-        f"--------------------\n"
-    ]
-    # transcript.extend(header)
+    previous_anchor_id = None
 
     print(f"Starting simulation for {args.turns} turns (pairs)...")
 
     for turn in range(1, args.turns + 1):
-        # директивы дляя обоих
-        history_for_reasoner = []
-        for msg in history:
-            history_for_reasoner.append({"role": msg["role"], "content": msg["content"]})
-        
-        user_directive, friend_directive, anchor_id = reasoner.think(history=history_for_reasoner)
-        
-        # генерация ответа друга
+        # 1. Получаем блок от Reasoner
+        block_type, user_directive, friend_directive, anchor_id, topic, length, block_id = reasoner.think(
+            previous_anchor_id=previous_anchor_id
+        )
+
+        # 2. Генерация ответа друга
+        friend_centric_history = []
+        for msg in history[-10:]:
+            role = "user" if msg["role"] == "user" else "assistant"
+            friend_centric_history.append({"role": role, "content": msg["content"]})
+
         if turn == 1:
-            friend_prompt = "The session is starting. Greet the user and begin the first session."
-            friend_messages = [
-                {"role": "system", "content": friend_system_prompt},
-                {"role": "user", "content": friend_prompt + f"| {friend_directive}"}
-            ]
-            friend_response = friend_user.generate(friend_messages)
+            friend_prompt = "The session is starting. Greet your friend and begin the first topic of the chat."
+            friend_response = friend_manager.get_response(
+                history=[],
+                user_message=friend_prompt,
+                directive=friend_directive,
+                is_filler=(block_type == "filler"),
+            )
         else:
-            friend_history = []
-            for msg in history:
-                role = "assistant" if msg["role"] == "assistant" else "user"
-                friend_history.append({"role": role, "content": msg["content"]})
-            
-            friend_messages = [
-                {"role": "system", "content": friend_system_prompt}
-            ] + friend_history + [
-                {"role": "user", "content": f"Продолжи разговор.| {friend_directive}"}
-            ]
-            friend_response = friend_user.generate(friend_messages)
+            friend_response = friend_manager.get_response(
+                history=friend_centric_history,
+                user_message=history[-1]["content"],
+                directive=friend_directive,
+                is_filler=(block_type == "filler"),
+            )
 
         if not friend_response:
             print(f"Turn {turn}: friend failed to generate response.")
@@ -118,21 +124,35 @@ def main():
         transcript.append(log_entry)
         print(f"Turn {turn}/{args.turns} - friend: {friend_response}")
 
-        # ответ пользователя
+        # Сохраняем реплику друга в Container
+        container["utterances"].append({
+            "role": "friend",
+            "text": friend_response,
+            "annotation": {
+                "anchor_id": anchor_id,
+                "directive": friend_directive
+            },
+            "meta": {
+                "step": turn,
+                "block_id": block_id
+            }
+        })
+
+        # 3. Генерация ответа пользователя
         user_message = history[-1]["content"]
-        
+
         user_centric_history = []
-        for msg in history:
+        for msg in history[-10:]:
             role = "user" if msg["role"] == "assistant" else "assistant"
             user_centric_history.append({"role": role, "content": msg["content"]})
-        
-        # Передаём директиву пользователя в get_response
+
         user_response = user_manager.get_response(
             history=user_centric_history,
             user_message=user_message,
-            directive=user_directive 
+            directive=user_directive,
+            is_filler=(block_type == "filler")
         )
-        
+
         if not user_response:
             print(f"Turn {turn}: user failed to generate response.")
             break
@@ -141,24 +161,40 @@ def main():
         log_entry = f"Turn {turn}/{args.turns} - user: {user_response}\n"
         transcript.append(log_entry)
         print(f"Turn {turn}/{args.turns} - user: {user_response}")
-        
-        # сохранение разметки
-        anchor_log.append({
-            "turn": turn,
-            "anchor_id": anchor_id,
-            "user_directive": user_directive,
-            "friend_directive": friend_directive,
-            "user_response": user_response,
-            "friend_response": friend_response
+
+        # Сохраняем реплику user'а в Container
+        container["utterances"].append({
+            "role": "user",
+            "text": user_response,
+            "annotation": {
+                "anchor_id": anchor_id,
+                "directive": user_directive
+            },
+            "meta": {
+                "step": turn,
+                "block_id": block_id
+            }
         })
 
-        
+        previous_anchor_id = anchor_id
 
-    # Write to file
-    with open(args.output_file, 'w', encoding='utf-8') as f:
+    # 6. Сохранение Container в JSON
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f"dialogue_{args.dialogue_id}.json"
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(container, f, ensure_ascii=False, indent=2)
+
+    print(f"\nDialogue saved to {output_file}")
+
+    # 7. Сохранение транскрипта (опционально)
+    transcript_file = output_dir / f"dialogue_{args.dialogue_id}_transcript.txt"
+    with open(transcript_file, "w", encoding="utf-8") as f:
         f.write("\n".join(transcript))
 
-    print(f"\nSimulation complete. Log written to {args.output_file}")
+    print(f"Transcript saved to {transcript_file}")
+
 
 if __name__ == "__main__":
     main()

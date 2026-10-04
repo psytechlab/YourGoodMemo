@@ -19,54 +19,150 @@ class IReasoner:
 
 class RandomReasoner(IReasoner):
 
-    def __init__(self,  anchors_path: str):
+    def __init__(self, anchors_path: str, filler_topics_path: str, filler_instruction_path: str,):
+
         with open(anchors_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
             self.anchors = data.get('anchors', [])
 
-        self.anchor_persistence_steps = 0
-        self.current_anchor = None
+        with open(filler_topics_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            self.filler_topics = data.get('filler_topics', [])
 
-    def dice_directives(self):
-        """Возвращает две директивы: для пользователя и для друга"""
-        random_num = random.randint(0, len(self.anchors) - 1)
-        current_anchor = self.anchors[random_num]
+        with open(filler_instruction_path, 'r', encoding='utf-8') as f:
+            self.filler_instruction = f.read()
+
+        self.current_anchor = None
+        self.current_block_type = None
+        self.current_topic = None
+        self.persistence_steps = 0
+        self.current_block_length = 0
+        self.recent_filler_topics = []
+
+        self._block_counter = 1
+        self.current_block_id = None
+
+#    def dice_directives(self):
+#        """Возвращает две директивы: для пользователя и для друга"""
+#        random_num = random.randint(0, len(self.anchors) - 1)
+#        current_anchor = self.anchors[random_num]
         
         # Выбираем случайную директиву для пользователя из списка
-        user_dir = random.choice(current_anchor.get("user_directives", [""]))
+#        user_dir = random.choice(current_anchor.get("user_directives", [""]))
         
-        # Выбираем случайную директиву для друга из списка
-        friend_dir = random.choice(current_anchor.get("friend_directives", [""]))
+#        # Выбираем случайную директиву для друга из списка
+#        friend_dir = random.choice(current_anchor.get("friend_directives", [""]))
         
-        return user_dir, friend_dir, current_anchor.get("id")
-
-#    def dice_directive(self):
-#        random_num = random.randint(0, len(self.situations) - 1)
-#        return self.situations[random_num]["directive"]
-
-            
-#    def think(self, **kwargs):
-#        if self.directive_persistence_steps == 0:
-#            self.directive_persistence_steps = random.randint(1, 3)
-#            self.current_direcitve = self.dice_directive()
-#            return self.current_direcitve
-#        self.directive_persistence_steps -= 1
-#        return "Продолжай общаться в контексте предыдущей директивы" 
+#        return user_dir, friend_dir, current_anchor.get("id")
 
 
-def think(self, **kwargs):
-    # Если нет текущего anchor или время вышло
-    if self.anchor_persistence_steps <= 0 or not self.current_anchor:
-        random_num = random.randint(0, len(self.anchors) - 1)
-        self.current_anchor = self.anchors[random_num]
-        self.anchor_persistence_steps = random.randint(2, 5)
+#def think(self, **kwargs):
+#    # Если нет текущего anchor или время вышло
+#    if self.anchor_persistence_steps <= 0 or not self.current_anchor:
+#        random_num = random.randint(0, len(self.anchors) - 1)
+#        self.current_anchor = self.anchors[random_num]
+#        self.anchor_persistence_steps = random.randint(2, 5)
     
-    self.anchor_persistence_steps -= 1
+#    self.anchor_persistence_steps -= 1
     
-    user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
-    friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
+#    user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
+#    friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
     
-    return user_dir, friend_dir, self.current_anchor.get("id")
+#    return user_dir, friend_dir, self.current_anchor.get("id")
+
+    def think(self, previous_anchor_id=None, **kwargs):
+
+        # 1. Продолжаем текущий блок
+        if self.persistence_steps > 0:
+            self.persistence_steps -= 1
+            return self._current_block()
+
+        # 2. Новый блок
+        return self._start_block(previous_anchor_id)
+
+    def _start_block(self, previous_anchor_id=None):
+        # Новый блок
+        self._switch_block_type()
+
+        if self.current_block_type == "anchor":
+            self.current_anchor = self._select_anchor(previous_anchor_id)
+            self.current_topic = None
+            self.current_block_length = random.randint(2, 5)
+            self.current_block_id = f"anchor_{self._block_counter:03d}"
+
+        elif self.current_block_type == "filler":
+            self.current_anchor = None
+            self.current_topic = self._select_filler_topic()
+            self._update_recent_topics(self.current_topic)
+            self.current_block_length = random.randint(3, 6)
+            self.current_block_id = f"filler_{self._block_counter:03d}"
+
+        self._block_counter += 1
+        self.persistence_steps = self.current_block_length - 1
+
+
+        return self._current_block()
+
+    def _current_block(self):
+        if self.current_block_type == "anchor":
+            user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
+            friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
+            return (
+                "anchor",
+                user_dir,
+                friend_dir,
+                self.current_anchor["id"],
+                "none",
+                self.current_block_length,
+                self.current_block_id,
+            )
+
+        if self.current_block_type == "filler":
+            directive = self.current_topic
+            return (
+                "filler",
+                directive,
+                directive,
+                "none",
+                self.current_topic,
+                self.current_block_length,
+                self.current_block_id,
+            )
+
+        return ("none", "none", "none", "none", "none", 0, "none")
+
+
+
+    def _switch_block_type(self):
+        # Меняет тип блока: anchor на filler
+        if self.current_block_type is None:
+            self.current_block_type = random.choice(["anchor", "filler"])
+        elif self.current_block_type == "anchor":
+            self.current_block_type = "filler"
+        else:
+            self.current_block_type = "anchor"
+
+    def _select_anchor(self, previous_anchor_id):
+        # Выбирает anchor, не равный предыдущему
+        available = [a for a in self.anchors if a["id"] != previous_anchor_id]
+        if not available:
+            available = self.anchors
+        return random.choice(available)
+
+    def _select_filler_topic(self):
+        # Выбирает тему, не из recent_filler_topics
+        available = [t for t in self.filler_topics if t not in self.recent_filler_topics]
+        if not available:
+            available = self.filler_topics
+        return random.choice(available)
+
+    def _update_recent_topics(self, topic):
+        # Хранит 2 последние темы
+        self.recent_filler_topics.append(topic)
+        self.recent_filler_topics = self.recent_filler_topics[-2:]
+
+
+
 
 class LLMReasoner(RandomReasoner):
     def __init__(self, llm_client: LLMuser, anchors_path: str):
@@ -147,5 +243,5 @@ class LLMReasoner(RandomReasoner):
 
 
 class DummyReasoner(IReasoner):
-    def think(self, **kwargs) -> str:
-        return ""
+    def think(self, **kwargs):
+        return ("anchor", "none", "none", "none", "none", 0, "none")

@@ -2,6 +2,7 @@ import csv
 import logging
 import os
 from datetime import datetime
+from pyexpat.errors import messages
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -28,28 +29,33 @@ def _ensure_csv():
 
 
 class ConversationManager:
-    def __init__(self, llm_user, system_prompt, reasoner, csv_logging=True):
+    def __init__(self, llm_user, system_prompt, reasoner, csv_logging=True, filler_instruction=""):
         self.llm_user = llm_user
         self.system_prompt = system_prompt
         self.reasoner = reasoner
         self.csv_logging = csv_logging
+        self.filler_instruction = filler_instruction
 
-    def get_response(self, history, user_message, directive: str):
+    def get_response(self, history, user_message, directive, is_filler=False):
         messages = []
         messages.append({"role": "system", "content": self.system_prompt})
+        
+        if is_filler and self.filler_instruction:
+            messages.append({"role": "system", "content": self.filler_instruction})
+        
         messages += history
-
-        messages.append({"role": "user", "content": user_message + f"| {directive}"})
-
+        messages.append({"role": "system", "content": f"DIRECTIVE: {directive}"})
+        messages.append({"role": "user", "content": user_message})
+        
         response = self.llm_user.generate(messages)
 
         if self.csv_logging:
             _ensure_csv()
             _csv_writer.writerow([
                 datetime.now().isoformat(),
-                directive,
+                directive,          
                 user_message,
                 response
             ])
-
+        
         return response

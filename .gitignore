@@ -10,6 +10,9 @@ prompts/
 reference/
 data/anchors.yaml
 docs/Генератор_переписки.md
+output/dialogues/
+output/*.json
+output/*.txt
 
 # Личные переписки
 data/result.json
