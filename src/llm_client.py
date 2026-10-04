@@ -35,7 +35,6 @@ class LLMuser:
             return None
         
     def generate(self, messages: list[dict[str, str]]):
-        # ПРИНУДИТЕЛЬНАЯ ПОДСТАНОВКА, ЕСЛИ model_name = None
         if self.model_name is None:
             self.model_name = "mistral-nemo:12b"
             print("установлена модель в generate")

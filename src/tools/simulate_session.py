@@ -88,7 +88,6 @@ def main():
     print(f"Starting simulation for {args.turns} turns (pairs)...")
 
     for turn in range(1, args.turns + 1):
-        # 1. Получаем блок от Reasoner
         block_type, user_directive, friend_directive, anchor_id, topic, length, block_id = reasoner.think(
             previous_anchor_id=previous_anchor_id
         )
@@ -124,7 +123,6 @@ def main():
         transcript.append(log_entry)
         print(f"Turn {turn}/{args.turns} - friend: {friend_response}")
 
-        # Сохраняем реплику друга в Container
         container["utterances"].append({
             "role": "friend",
             "text": friend_response,
@@ -138,7 +136,7 @@ def main():
             }
         })
 
-        # 3. Генерация ответа пользователя
+        # Генерация ответа пользователя
         user_message = history[-1]["content"]
 
         user_centric_history = []
@@ -162,7 +160,6 @@ def main():
         transcript.append(log_entry)
         print(f"Turn {turn}/{args.turns} - user: {user_response}")
 
-        # Сохраняем реплику user'а в Container
         container["utterances"].append({
             "role": "user",
             "text": user_response,
@@ -178,7 +175,7 @@ def main():
 
         previous_anchor_id = anchor_id
 
-    # 6. Сохранение Container в JSON
+    # Container в JSON
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"dialogue_{args.dialogue_id}.json"
@@ -188,7 +185,7 @@ def main():
 
     print(f"\nDialogue saved to {output_file}")
 
-    # 7. Сохранение транскрипта (опционально)
+
     transcript_file = output_dir / f"dialogue_{args.dialogue_id}_transcript.txt"
     with open(transcript_file, "w", encoding="utf-8") as f:
         f.write("\n".join(transcript))
