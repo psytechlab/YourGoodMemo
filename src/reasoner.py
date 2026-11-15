@@ -1,6 +1,6 @@
 import random
 import yaml
-from src.llm_client import LLMuser
+from src.llm_client import LLMClient
 
 
 class IReasoner:
@@ -8,7 +8,9 @@ class IReasoner:
         pass
 
 
-class RandomReasoner(IReasoner):
+
+# Narrator отвечает за структуру текста
+class Narrator:
 
     def __init__(self, anchors_path: str, filler_topics_path: str, filler_instruction_path: str):
         with open(anchors_path, 'r', encoding='utf-8') as f:
@@ -61,12 +63,9 @@ class RandomReasoner(IReasoner):
 
     def _current_block(self):
         if self.current_block_type == "anchor":
-            user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
-            friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
             return (
                 "anchor",
-                user_dir,
-                friend_dir,
+                self.current_anchor.get("directive", ""),
                 self.current_anchor["id"],
                 "none",
                 self.current_block_length,
@@ -74,18 +73,16 @@ class RandomReasoner(IReasoner):
             )
 
         if self.current_block_type == "filler":
-            directive = self.current_topic
             return (
                 "filler",
-                directive,
-                directive,
+                self.current_topic,
                 "none",
                 self.current_topic,
                 self.current_block_length,
                 self.current_block_id,
             )
 
-        return ("none", "none", "none", "none", "none", 0, "none")
+        return ("none", "none", "none", "none", 0, "none")
 
     def _switch_block_type(self):
         if self.current_block_type is None:
@@ -112,21 +109,14 @@ class RandomReasoner(IReasoner):
         self.recent_filler_topics = self.recent_filler_topics[-2:]
 
 
-class LLMReasoner(RandomReasoner):
-    def __init__(self, llm_client: LLMuser, anchors_path: str):
-        self.llm_client = llm_client
-        self.anchor_persistence_steps = 0
-        self.current_anchor = None
-        self.directive_repeat_counter = 0
-        self.cooldown_steps = 0
-        self.delay = random.choice([2, 4, 6, 8, 10])
 
-        with open(anchors_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-            self.anchors = data.get('anchors', [])
+class LLMNarrator(Narrator):
+    def __init__(self, llm_client, anchors_path, filler_topics_path, filler_instruction_path):
+        super().__init__(anchors_path, filler_topics_path, filler_instruction_path)
+        self.llm_client = llm_client
 
         self.prompt_template = """
-        Analyze the following dialogue history. By using provided description and typical utterances, identify which anchor from the list above best matches the current state of the conversation, especially the last message.
+        Analyze the following dialogue history. Identify which anchor from the list above best matches the current state of the conversation, especially the last message.
 
         Available anchors:
         {}
@@ -145,48 +135,77 @@ class LLMReasoner(RandomReasoner):
             context += f"- {a['id']}: {a.get('name', '')}\n"
         return context
 
-    def think(self, **kwargs) -> tuple:
-        history = kwargs.get('history', [])
+    def _start_block(self, previous_anchor_id=None, history=None):
+        self._switch_block_type()
 
-        if self.anchor_persistence_steps > 0 and self.current_anchor:
-            self.anchor_persistence_steps -= 1
-            user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
-            friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
-            return user_dir, friend_dir, self.current_anchor.get("id")
+        if self.current_block_type == "anchor":
+            # Используем LLM для выбора anchor'а
+            prompt = self.prompt_template.format(
+                self._get_anchors_context(),
+                history or ""
+            )
+            anchor_id = self.llm_client.respond(prompt).strip()
 
-        prompt = self.prompt_template.format(
-            self._get_anchors_context(),
-            history or ""
-        )
+            selected_anchor = None
+            for a in self.anchors:
+                if a["id"] == anchor_id:
+                    selected_anchor = a
+                    break
 
-        anchor_id = self.llm_client.respond(prompt).strip()
-
-        selected_anchor = None
-        for a in self.anchors:
-            if a["id"] == anchor_id:
-                selected_anchor = a
-                break
-
-        if not selected_anchor:
-            selected_anchor = random.choice(self.anchors)
-
-        if self.current_anchor and self.current_anchor.get("id") == selected_anchor.get("id"):
-            self.directive_repeat_counter += 1
-            if self.directive_repeat_counter >= 2:
+            if not selected_anchor:
                 selected_anchor = random.choice(self.anchors)
-                self.directive_repeat_counter = 0
-        else:
-            self.directive_repeat_counter = 0
 
-        self.current_anchor = selected_anchor
-        self.anchor_persistence_steps = random.randint(2, 5)
+            # Запрет повтора
+            if previous_anchor_id and selected_anchor["id"] == previous_anchor_id:
+                available = [a for a in self.anchors if a["id"] != previous_anchor_id]
+                selected_anchor = random.choice(available)
 
-        user_dir = random.choice(self.current_anchor.get("user_directives", [""]))
-        friend_dir = random.choice(self.current_anchor.get("friend_directives", [""]))
+            self.current_anchor = selected_anchor
+            self.current_topic = None
+            self.current_block_length = random.randint(2, 5)
+            self.current_block_id = f"anchor_{self._block_counter:03d}"
 
-        return user_dir, friend_dir, self.current_anchor.get("id")
+        elif self.current_block_type == "filler":
+            self.current_anchor = None
+            self.current_topic = self._select_filler_topic()
+            self._update_recent_topics(self.current_topic)
+            self.current_block_length = random.randint(3, 6)
+            self.current_block_id = f"filler_{self._block_counter:03d}"
+
+        self._block_counter += 1
+        self.persistence_steps = self.current_block_length - 1
+
+        return self._current_block()
+
+
+class DummyNarrator:
+    def think(self, previous_anchor_id=None, **kwargs):
+        return ("anchor", "none", "none", "none", 0, "none")
+
+
+
+# Reasoner (локальный) отвечает только за директиву для реплики внутри блока, think возвращает только одну директиву
+class Reasoner(IReasoner):
+
+    def __init__(self, anchors_path: str, filler_instruction_path: str):
+        with open(anchors_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            self.anchors = data.get('anchors', [])
+
+        with open(filler_instruction_path, 'r', encoding='utf-8') as f:
+            self.filler_instruction = f.read()
+
+    def think(self, block_type, anchor_id, topic, **kwargs) -> str:
+        if block_type == "anchor":
+            for a in self.anchors:
+                if a["id"] == anchor_id:
+                    return a.get("directive", "")
+            return ""
+        if block_type == "filler":
+            return topic
+        return ""
 
 
 class DummyReasoner(IReasoner):
     def think(self, **kwargs):
-        return ("anchor", "none", "none", "none", "none", 0, "none")
+        return "none"
