@@ -1,6 +1,6 @@
 import requests
 
-class LLMuser:
+class LLMClient:
 
     def __init__(self, model_name: str, base_url:str, auth_token:str, system_prompt=None, temperature=0.7):
         self.base_url = base_url
