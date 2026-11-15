@@ -1,20 +1,9 @@
 import csv
-import logging
-import os
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[
-                        logging.StreamHandler()
-                    ])
 
-# --- CSV logging setup ---
-TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-CSV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       f"logs")
-CSV_PATH = os.path.join(CSV_DIR, f"directives_{TIMESTAMP}.csv")
-os.makedirs(CSV_DIR, exist_ok=True)
+CSV_PATH = "logs/directives.csv"
+
 _csv_file = None
 _csv_writer = None
 
@@ -28,33 +17,74 @@ def _ensure_csv():
 
 
 class ConversationManager:
-    def __init__(self, llm_user, system_prompt, reasoner, csv_logging=True, filler_instruction=""):
+    #  сам хранит историю, обрезает, решает первый ход или продолжение, собирает messages
+    def __init__(
+        self,
+        llm_user,
+        system_prompt,
+        csv_logging=True,
+        filler_instruction="",
+        sides=None,
+        first_message=None,
+        history_limit=10,
+    ):
         self.llm_user = llm_user
         self.system_prompt = system_prompt
-        self.reasoner = reasoner
         self.csv_logging = csv_logging
         self.filler_instruction = filler_instruction
+        self.sides = sides or {}
+        self.first_message = first_message # first_message — текст первого сообщения
+        self.history_limit = history_limit
+        self.history = []
 
-    def get_response(self, history, user_message, directive, is_filler=False):
+    def get_response(self, directive, side, is_filler=False, incoming_message=None):
+        # Реплика собеседника, которая используется как user_message
+        if incoming_message:
+            self.history.append({"role": "user", "content": incoming_message})
+
+
+        # Решает первый ход или продолжение
+        if not self.history and self.first_message:
+            user_message = self.first_message
+            history_for_llm = []
+        else:
+            user_message = "Продолжи."
+            if self.history:
+                # Продолжение после последней реплики собеседника 
+                user_message = self.history[-1]["content"]
+            # Обрезка истории внутри
+            history_for_llm = self.history[-self.history_limit:]
+
         messages = []
         messages.append({"role": "system", "content": self.system_prompt})
-        
-        if is_filler and self.filler_instruction:
-            messages.append({"role": "system", "content": self.filler_instruction})
-        
-        messages += history
-        messages.append({"role": "system", "content": f"DIRECTIVE: {directive}"})
+
+        if is_filler:
+            # Filler: тема + инструкция
+            messages.append({"role": "system", "content": f"TOPIC: {directive}"})
+            if self.filler_instruction:
+                messages.append({"role": "system", "content": self.filler_instruction})
+        else:
+            # Anchor: директива + side
+            messages.append({"role": "system", "content": f"DIRECTIVE: {directive}"})
+            side_instruction = self.sides.get(side, "")
+            if side_instruction:
+                messages.append({"role": "system", "content": side_instruction})
+
+        messages += history_for_llm
         messages.append({"role": "user", "content": user_message})
-        
+
         response = self.llm_user.generate(messages)
+
+        # Сохраняет ответ в свою историю
+        self.history.append({"role": "assistant", "content": response})
 
         if self.csv_logging:
             _ensure_csv()
             _csv_writer.writerow([
                 datetime.now().isoformat(),
-                directive,          
+                directive,
                 user_message,
-                response
+                response,
             ])
-        
+
         return response

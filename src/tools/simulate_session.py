@@ -1,13 +1,16 @@
 import os
 import json
 import argparse
+import random
 from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
 
-from src.llm_client import LLMuser
+import yaml
+
+from src.llm_client import LLMClient
 from src.conversation_manager import ConversationManager
-from src.reasoner import RandomReasoner, LLMReasoner, DummyReasoner
+from src.reasoner import Narrator, Reasoner, DummyNarrator, DummyReasoner
 
 load_dotenv()
 
@@ -47,9 +50,18 @@ def main():
     with open(args.filler_instruction_path, "r", encoding="utf-8") as f:
         filler_instruction = f.read()
 
-    # Reasoner
+    with open("prompts/sides.yaml", "r", encoding="utf-8") as f:
+        sides = yaml.safe_load(f)
+
+    # Narrator отвечает за структуру блоков
     if args.reasoner == "random":
-        reasoner = RandomReasoner(args.anchors_path, args.filler_topics_path, args.filler_instruction_path)
+        narrator = Narrator(args.anchors_path, args.filler_topics_path, args.filler_instruction_path)
+    else:
+        narrator = DummyNarrator()
+
+    # Reasoner отвечает только за директиву
+    if args.reasoner == "random":
+        reasoner = Reasoner(args.anchors_path, args.filler_instruction_path)
     else:
         reasoner = DummyReasoner()
 
@@ -59,8 +71,15 @@ def main():
         with open("prompts/friend_prompt.txt", "r", encoding="utf-8") as f:
             friend_specific = f.read()
         friend_system_prompt = friend_specific + "\n\n" + general_prompt
-        friend_user = LLMuser(model_name=friend_model, base_url=base_url, auth_token=auth_token, system_prompt=friend_system_prompt)
-        friend_manager = ConversationManager(friend_user, friend_system_prompt, reasoner, filler_instruction=filler_instruction)
+        friend_user = LLMClient(model_name=friend_model, base_url=base_url, auth_token=auth_token, system_prompt=friend_system_prompt)
+        # Менеджер получает first_message для первой фразы
+        friend_manager = ConversationManager(
+            friend_user,
+            friend_system_prompt,
+            filler_instruction=filler_instruction,
+            sides=sides,
+            first_message="The session is starting. Greet your friend and begin the first topic of the chat.",
+        )
 
         # user
         with open(args.user_prompt_path, "r", encoding="utf-8") as f:
@@ -69,8 +88,14 @@ def main():
             character_plist = f.read()
         user_persona = user_specific.format(character_plist)
         user_persona = user_persona + "\n\n" + general_prompt
-        user_llm = LLMuser(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token, system_prompt=user_persona)
-        user_manager = ConversationManager(user_llm, user_persona, reasoner, filler_instruction=filler_instruction)
+        user_llm = LLMClient(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token, system_prompt=user_persona)
+        # У user нет своего первого сообщения.
+        user_manager = ConversationManager(
+            user_llm,
+            user_persona,
+            filler_instruction=filler_instruction,
+            sides=sides,
+        )
         author_manager = None
 
     elif args.mode == "monologue":
@@ -81,12 +106,18 @@ def main():
             character_profile = f.read()
         monologue_specific = monologue_specific.format(character_profile=character_profile)
         monologue_system_prompt = monologue_specific + "\n\n" + general_prompt
-        author_user = LLMuser(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token, system_prompt=monologue_system_prompt)
-        author_manager = ConversationManager(author_user, monologue_system_prompt, reasoner, filler_instruction=filler_instruction)
+        author_user = LLMClient(model_name=args.user_base_model, base_url=base_url, auth_token=auth_token, system_prompt=monologue_system_prompt)
+        author_manager = ConversationManager(
+            author_user,
+            monologue_system_prompt,
+            filler_instruction=filler_instruction,
+            sides=sides,
+            first_message="Start your personal notes. Write your first entry.",
+        )
 
         friend_manager = None
         user_manager = None
-    
+
     # Container
     container = {
         "id": args.dialogue_id,
@@ -98,7 +129,6 @@ def main():
     }
 
     # Simulation state
-    history = []
     transcript = []
     previous_anchor_id = None
 
@@ -106,37 +136,31 @@ def main():
 
     for turn in range(1, args.turns + 1):
 
-        block_type, user_directive, friend_directive, anchor_id, topic, length, block_id = reasoner.think(
+        block_type, block_directive, anchor_id, topic, length, block_id = narrator.think(
             previous_anchor_id=previous_anchor_id
         )
-        
+        directive = reasoner.think(block_type=block_type, anchor_id=anchor_id, topic=topic)
+
+        # side выбирается на блок 
+        if args.mode == "dialog":
+            initiator = random.choice(["user", "friend"])
+            user_side = "initiator" if initiator == "user" else "respondent"
+            friend_side = "respondent" if initiator == "user" else "initiator"
+        else:
+            author_side = "initiator"
+
         # Монолог
         if args.mode == "monologue":
-            author_history = []
-            for msg in history[-10:]:
-                author_history.append({"role": "assistant", "content": msg["content"]})
-
-            if turn == 1:
-                author_prompt = "Start your personal notes. Write your first entry."
-                author_response = author_manager.get_response(
-                    history=[],
-                    user_message=author_prompt,
-                    directive=user_directive,
-                    is_filler=(block_type == "filler"),
-                )
-            else:
-                author_response = author_manager.get_response(
-                    history=author_history,
-                    user_message="Продолжи.",
-                    directive=user_directive,
-                    is_filler=(block_type == "filler"),
-                )
+            author_response = author_manager.get_response(
+                directive=directive,
+                side=author_side,
+                is_filler=(block_type == "filler"),
+            )
 
             if not author_response:
                 print(f"Turn {turn}: author failed to generate response.")
                 break
 
-            history.append({"role": "author", "content": author_response})
             log_entry = f"Turn {turn}/{args.turns} - author: {author_response}\n"
             transcript.append(log_entry)
             print(f"Turn {turn}/{args.turns} - author: {author_response}")
@@ -146,46 +170,36 @@ def main():
                 "text": author_response,
                 "annotation": {
                     "anchor_id": anchor_id,
-                    "directive": user_directive
+                    "directive": directive,
                 },
                 "meta": {
                     "step": turn,
-                    "block_id": block_id
+                    "block_id": block_id,
+                    "side": author_side,
                 }
             })
 
             previous_anchor_id = anchor_id
-            continue   
+            continue
+
         # Диалог
         else:
+            # Генерация ответа друга, если у пользователя уже есть реплика, передаём её другу
+            incoming_for_friend = None
+            if user_manager and user_manager.history:
+                incoming_for_friend = user_manager.history[-1]["content"]
 
-            # Генерация ответа друга
-            friend_centric_history = []
-            for msg in history[-10:]:
-                role = "user" if msg["role"] == "user" else "assistant"
-                friend_centric_history.append({"role": role, "content": msg["content"]})
-
-            if turn == 1:
-                friend_prompt = "The session is starting. Greet your friend and begin the first topic of the chat."
-                friend_response = friend_manager.get_response(
-                    history=[],
-                    user_message=friend_prompt,
-                    directive=friend_directive,
-                    is_filler=(block_type == "filler"),
-                )
-            else:
-                friend_response = friend_manager.get_response(
-                    history=friend_centric_history,
-                    user_message=history[-1]["content"],
-                    directive=friend_directive,
-                    is_filler=(block_type == "filler"),
-                )
+            friend_response = friend_manager.get_response(
+                directive=directive,
+                side=friend_side,
+                is_filler=(block_type == "filler"),
+                incoming_message=incoming_for_friend,
+            )
 
             if not friend_response:
                 print(f"Turn {turn}: friend failed to generate response.")
                 break
 
-            history.append({"role": "assistant", "content": friend_response})
             log_entry = f"Turn {turn}/{args.turns} - friend: {friend_response}\n"
             transcript.append(log_entry)
             print(f"Turn {turn}/{args.turns} - friend: {friend_response}")
@@ -195,34 +209,27 @@ def main():
                 "text": friend_response,
                 "annotation": {
                     "anchor_id": anchor_id,
-                    "directive": friend_directive
+                    "directive": directive,
                 },
                 "meta": {
                     "step": turn,
-                    "block_id": block_id
+                    "block_id": block_id,
+                    "side": friend_side,
                 }
             })
 
-            # Генерация ответа пользователя
-            user_message = history[-1]["content"]
-
-            user_centric_history = []
-            for msg in history[-10:]:
-                role = "user" if msg["role"] == "assistant" else "assistant"
-                user_centric_history.append({"role": role, "content": msg["content"]})
-
+            # Генерация ответа пользователя, передаём реплику друга в user_manager
             user_response = user_manager.get_response(
-                history=user_centric_history,
-                user_message=user_message,
-                directive=user_directive,
-                is_filler=(block_type == "filler")
+                directive=directive,
+                side=user_side,
+                is_filler=(block_type == "filler"),
+                incoming_message=friend_response,
             )
 
             if not user_response:
                 print(f"Turn {turn}: user failed to generate response.")
                 break
 
-            history.append({"role": "user", "content": user_response})
             log_entry = f"Turn {turn}/{args.turns} - user: {user_response}\n"
             transcript.append(log_entry)
             print(f"Turn {turn}/{args.turns} - user: {user_response}")
@@ -232,11 +239,12 @@ def main():
                 "text": user_response,
                 "annotation": {
                     "anchor_id": anchor_id,
-                    "directive": user_directive
+                    "directive": directive,
                 },
                 "meta": {
                     "step": turn,
-                    "block_id": block_id
+                    "block_id": block_id,
+                    "side": user_side,
                 }
             })
 
@@ -251,7 +259,6 @@ def main():
         json.dump(container, f, ensure_ascii=False, indent=2)
 
     print(f"\nDialogue saved to {output_file}")
-
 
     transcript_file = output_dir / f"dialogue_{args.dialogue_id}_transcript.txt"
     with open(transcript_file, "w", encoding="utf-8") as f:
